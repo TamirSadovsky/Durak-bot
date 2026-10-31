@@ -90,8 +90,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     log.info("Join a Durak table and sit yourself; the bot only plays once seated.")
     log.info(
-        "Note: PlayOK draws cards on canvas — full card auto-play needs mapping v2; "
-        "Take/Pass/OK DOM buttons are wired."
+        "Card state is read from patched dk.js (__durakBoard); canvas is display-only. "
+        "Plays go through select+opcode 92 (DOM Take/Pass preferred when visible)."
     )
 
     pw = context = page = None
@@ -100,15 +100,32 @@ def main(argv: list[str] | None = None) -> int:
         page = find_game_page(context) or page
         if args.probe:
             page.wait_for_timeout(1500)
+            hook = page.evaluate(
+                """() => ({
+                  hasBoard: !!window.__durakBoard,
+                  hasTab: !!window.__durakTab,
+                  hasGetState: typeof window.__durakGetState === 'function',
+                  patchNotes: window.__durakPatchNotes || null,
+                  wsCount: (window.__durakMessages || []).length
+                })"""
+            )
+            notes = getattr(context, "_durak_patch_notes", [])
             parsed = parse_page(page)
             print("=== PlayOK probe ===")
             print(f"url: {page.url}")
+            print(f"dk_hook: {hook}")
+            print(f"patch_notes: {notes}")
             print(f"parse_ok: {parsed.parse_ok}")
+            print(f"state_source: {parsed.state_source}")
             print(f"in_game_shell: {parsed.in_game_shell}")
-            print(f"canvas_only_cards: {parsed.canvas_only_cards}")
+            print(f"board_active: {parsed.board_active} seat={parsed.our_seat}")
             print(f"seats: {parsed.seat_labels}")
             print(f"hand ({len(parsed.hand)}): {[str(c) for c in parsed.hand]}")
-            print(f"trump: {parsed.trump}")
+            print(
+                f"table attacks: {[str(c) for c in parsed.table_attacks]} "
+                f"defenses: {[str(c) if c else '-' for c in parsed.table_defenses]}"
+            )
+            print(f"trump: {parsed.trump} card={parsed.trump_card}")
             print(f"stock_size: {parsed.stock_size}")
             print(
                 f"buttons take/pass/done: "
@@ -119,10 +136,15 @@ def main(argv: list[str] | None = None) -> int:
             print("--- text sample ---")
             sample = parsed.raw_text_sample[:1500]
             print(sample.encode("ascii", "replace").decode("ascii"))
-            print("Browser left open 20s for manual inspection...")
-            page.wait_for_timeout(20_000)
-            # Shell detection counts as successful discovery even without hand cards
-            return 0 if (parsed.parse_ok or parsed.in_game_shell) else 2
+            print("Browser left open 15s for manual join/sit (re-probe state)...")
+            page.wait_for_timeout(15_000)
+            parsed2 = parse_page(page)
+            print(
+                f"after wait: source={parsed2.state_source} "
+                f"hand={[str(c) for c in parsed2.hand]} "
+                f"trump={parsed2.trump} active={parsed2.board_active}"
+            )
+            return 0 if (parsed.parse_ok or parsed.in_game_shell or hook.get("hasGetState")) else 2
 
         loop = BotLoop(
             page,

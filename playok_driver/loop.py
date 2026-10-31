@@ -66,6 +66,7 @@ class BotLoop:
                     "event": "parse_fail",
                     "errors": parsed.parse_errors,
                     "matched": parsed.matched_selectors,
+                    "source": parsed.state_source,
                     "sample": parsed.raw_text_sample[:500],
                 }
             )
@@ -84,11 +85,24 @@ class BotLoop:
             return None
 
         self._fail_streak = 0
-        if not parsed.our_turn and not parsed.can_take and not parsed.can_pass:
+        if (
+            not parsed.our_turn
+            and not parsed.can_take
+            and not parsed.can_pass
+            and not parsed.board_active
+        ):
             return None
 
-        state = parsed_to_state(parsed, our_index=self.config.our_index)
-        self.memory.observe_state(state, self.config.our_index)
+        our_index = (
+            parsed.our_seat
+            if parsed.our_seat >= 0
+            else self.config.our_index
+        )
+        # HeuristicPolicy is hero-centric at index 0 in bridged 2p state
+        state = parsed_to_state(parsed, our_index=0)
+        self.policy.our_index = 0
+        self.memory.observe_state(state, 0)
+        _ = our_index
 
         # Restrict legal actions to what UI suggests when possible
         actions = legal_actions(state)
@@ -108,9 +122,12 @@ class BotLoop:
                 "event": "act",
                 "action": str(action),
                 "ok": ok,
+                "source": parsed.state_source,
                 "hand": [str(c) for c in parsed.hand],
+                "table": [str(c) for c in parsed.table_attacks],
                 "trump": str(parsed.trump) if parsed.trump else None,
                 "stock": parsed.stock_size,
+                "seat": parsed.our_seat,
             }
         )
         if not ok:

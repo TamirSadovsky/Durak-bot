@@ -1,70 +1,83 @@
-# PlayOK Durak — DOM / state mapping
+# PlayOK Durak — state mapping
 
 Target: [https://www.playok.com/en/durak/](https://www.playok.com/en/durak/)  
-Client script: `/j/dk.js` (opens via `gstart('dk', 0)`).
+Client: `/j/dk.js` via `gstart('dk', 0)`.
 
-## Auth model
+## Chosen method (v1.1): patched `dk.js` in-memory board
 
-- **No passwords in repo, env commits, or CLI args.**
-- Browser uses a **persistent user-data dir** (`browser_profile/`, gitignored).
-- Landing page GUEST button runs: `document.cookie='kguest=1;path=/'; gstart('dk',0);`
-- The bot calls the same **without** reading any password. Logged-in sessions reuse the persistent profile cookies.
-- User still **joins a table and sits manually** (helpers exist but are optional).
+PlayOK paints the felt on **`canvas.noth`** (no DOM card nodes).  
+The bot **does not OCR**. Instead Playwright **route-patches** `/j/dk.js` so that when a table view constructs the board it runs:
 
-## Probe commands
-
-```powershell
-python -m durak_bot --probe
-python scripts\probe_playok.py
+```js
+window.__durakTab = this;
+window.__durakBoard = this.G;
 ```
 
-## Confirmed (headed probe on Windows, 2026-10-31)
+Helpers in `playok_driver/inject.js` then expose:
 
-| Element | Status | How |
-|---------|--------|-----|
-| Landing page | DOM | Title `PlayOK - Play Durak Online Free` |
-| Guest / login entry | DOM | `gstart('dk',0)` opens second window titled `Durak` |
-| Lobby table list | DOM | Rows with `>>` join buttons |
-| Seats | DOM | `button.butsit` (`#1`…`#n`) |
-| Game felt / cards | **Canvas** | Single `canvas.noth` covering the table — **no DOM card nodes** |
-| Take / Pass / OK | DOM (when dealt / your turn) | `button.minw` labels `take` / `pass` / `ok` (hidden until relevant) |
-| Trump / stock / hand ranks | Not in accessible DOM text while seated waiting | Encoded inside `dk.js` / drawn on canvas (`Gc=["hearts","diamonds","clubs","spades"]`) |
-| WebSocket | Present in `dk.js` | `WebSocket(c+"://"+host+":"+port+"/ws/")` — protocol not hooked in v1 |
+| API | Role |
+|-----|------|
+| `__durakGetState()` | Hand, table (`Ja`/`nc`), trump (`Qc`), seat (`V.Da`), hit-boxes (`Sa`) |
+| `__durakSelectCard(rank,suit)` | Select a card in our hand (selection bit `\|4`) |
+| `__durakCommit(mode)` | Send WebSocket JSON opcode **92** play / pass |
+| `__durakClickRegion(seat,i)` | CSS hit-box center for mouse fallback |
 
-### What works today
+`observe` (`parse_page`) merges this into `ParsedTable` with `state_source="dk_js"`.  
+Card plays prefer **select + commit**; Take/Pass prefer visible `button.minw`, else opcode 92.
 
-- Open headed Chromium with persistent profile.
-- Auto-open Durak client as guest (or reuse login cookies).
-- Detect game shell (canvas + seats).
-- Click **Take / Pass / OK** when those `button.minw` controls are visible & enabled.
-- Engine + AI closed loop offline with unit tests.
+### Card codec
 
-### Gaps (block full auto-play of card clicks)
+```text
+code = rankIndex * 8 + suitIndex   // bit2 = selected; + 128*seat in P[]
+rankIndex: 6..14 → 6,7,8,9,10,J,Q,K,A   (td[] in dk.js)
+suitIndex: 0♥ 1♦ 2♣ 3♠
+```
 
-1. **Hand and table cards are canvas-only** — `parse_page` cannot list `Card` objects from DOM while playing. Loop pauses on parse failure by design.
-2. Closing the gap (pick one for v2): canvas OCR, recorded click-regions by hand index, or reverse-engineer `dk.js` in-memory state / WS messages.
-3. Auto-join / multi-table farming remains out of scope.
+Implemented in `playok_driver/card_codec.py`.
 
-### Selectors (code)
+### WebSocket
 
-Defined in `playok_driver/parser.py`:
+Messages are text JSON: `{"i":[ints...],"s":[strings...]}`.  
+A WS hook logs traffic to `window.__durakMessages` (debug only).  
+Inbound board updates use sub-opcodes on the table controller (`Ve`): 10 trump, 11 `Ja`, 12 `nc`, 13 hands, 14 turn mode.  
+Outbound plays: `[92, tableId, 8, 0, ...cardCodes, timestamp]`.
 
-- Join: `button:has-text(">>")`
-- Sit: `button.butsit`
-- Take / Pass / OK: `button.minw:has-text('take'|'pass'|'ok')`
-- Cards: candidate CSS list (expected empty on live PlayOK)
+## Auth / workflow
 
-## Failure behavior
+- Persistent `browser_profile/` (gitignored). **No passwords in repo/CLI.**
+- Default: guest `gstart('dk',0)` (same as GUEST button).
+- User **joins and sits manually** (optional helpers: `>>`, `button.butsit`).
 
-Repeated parse failures → bot **pauses**; decisions append to `logs/decisions.jsonl` (gitignored).
+## DOM still used
 
-## Probe log (this machine)
+| Element | Selector |
+|---------|----------|
+| Join | `button:has-text(">>")` |
+| Seats | `button.butsit` |
+| Take / Pass / OK | `button.minw` with those labels |
+
+## Limits / gaps
+
+1. Board exists only **after a table view is created** (patched `dk.js` must load in that window). If patch needle drifts after a PlayOK deploy, `dk_patch.py` needs a new anchor.
+2. Stock size is not clearly exposed as a simple integer in the probed fields (`sc` is not treated as stock).
+3. Multi-player throw-in beyond 2p is only as complete as the engine bridge.
+4. Ban risk remains; human jitter is not stealth.
+5. OCR path not implemented (unnecessary while the JS board hook works).
+
+## Live verification (this machine)
 
 ```text
 Date: 2026-10-31
-Landing parse_ok: false (expected — no hand on marketing page)
-After gstart: Durak window, canvas.noth=1, lobby tables visible
-After join+sit: seat occupied, take/pass/ok present in DOM but not visible until turn
-Card DOM nodes: none
-Login wall: guest path works without password automation
+Method: dk.js route patch + __durakGetState
+Landing → gstart Durak window: canvas.noth present, lobby seats DOM
+Patch notes: board create needle applied
+Guest sit: Take/Pass/OK exist as button.minw (hidden until turn)
+Hand while awaiting opponents: empty until deal (expected)
+Codec/unit tests: encode/decode + patch idempotency
+```
+
+Re-check anytime:
+
+```powershell
+python -m durak_bot --probe
 ```

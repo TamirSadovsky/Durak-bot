@@ -1,10 +1,10 @@
-"""Parse PlayOK Durak DOM into a structured snapshot.
+"""Parse PlayOK Durak into a structured snapshot.
 
-PlayOK Durak (dk.js) renders the **table/hand on a full-size canvas**
-(`canvas.noth`). Take / Pass / OK are real DOM `button.minw` controls that
-appear when it is your turn. Lobby seats use `button.butsit`.
+Primary path: patched ``dk.js`` exposes ``window.__durakBoard`` (in-memory
+hand/table/trump). DOM is used for lobby chrome and Take/Pass/OK buttons.
+Canvas still paints the felt; we do not OCR it.
 
-See docs/playok-mapping.md for discovery notes.
+See docs/playok-mapping.md.
 """
 
 from __future__ import annotations
@@ -36,6 +36,9 @@ class ParsedTable:
     matched_selectors: List[str] = field(default_factory=list)
     canvas_only_cards: bool = False
     in_game_shell: bool = False
+    state_source: str = "none"  # dk_js | dom | none
+    our_seat: int = -1
+    board_active: bool = False
 
 
 # Lobby / shell
@@ -290,31 +293,46 @@ def parse_page(page: Any) -> ParsedTable:
     result.can_done = _button_enabled_visible(
         page, [s for s in BUTTON_DONE if "minw" in s], matched
     )
-    result.our_turn = result.can_take or result.can_pass or result.can_done
     result.matched_selectors = matched
 
-    if canvas_n and not result.hand:
-        result.canvas_only_cards = True
-        result.parse_errors.append(
-            f"Found {canvas_n} canvas element(s) (PlayOK uses canvas.noth for the "
-            "felt). Hand/table cards are not in the DOM — card identity requires "
-            "canvas OCR, coordinate maps, or a JS hook into dk.js state."
-        )
+    # Preferred: live dk.js board (patched) — real hand/table/trump
+    _merge_dk_js_state(page, result)
 
-    if result.hand:
+    if canvas_n and result.state_source != "dk_js":
+        result.canvas_only_cards = True
+        if not result.hand:
+            result.parse_errors.append(
+                f"Found {canvas_n} canvas element(s); DOM has no cards. "
+                "Waiting for patched dk.js board (__durakBoard) after you sit/deal."
+            )
+
+    result.our_turn = bool(
+        result.board_active
+        or result.can_take
+        or result.can_pass
+        or result.can_done
+        or (result.state_source == "dk_js" and result.hand and result.board_active)
+    )
+
+    if result.state_source == "dk_js":
+        # Board object is readable (hand may be empty while awaiting deal).
+        result.parse_ok = True
+        if not result.hand:
+            result.parse_errors.append(
+                "dk_js board hooked; hand empty (waiting for deal/opponents)."
+            )
+    elif result.hand:
         result.parse_ok = True
         if result.trump is None:
-            result.parse_errors.append("Hand found but trump not parsed.")
+            result.parse_errors.append("Hand found but trump not parsed yet.")
     elif result.our_turn and result.in_game_shell:
-        # Can act on take/pass without card parse (e.g. only PASS available)
         result.parse_ok = False
         result.parse_errors.append(
-            "Take/Pass/OK visible but hand cards not readable from DOM."
+            "Turn controls visible but hand not readable yet (sit + wait for deal)."
         )
     elif result.in_game_shell:
         result.parse_errors.append(
-            "In PlayOK game shell (lobby/table) but no DOM hand — sit and wait "
-            "for a deal; card moves still need canvas mapping."
+            "In PlayOK game shell — join/sit; hand appears on __durakBoard after deal."
         )
     else:
         result.parse_errors.append(
@@ -322,6 +340,45 @@ def parse_page(page: Any) -> ParsedTable:
         )
 
     return result
+
+
+def _merge_dk_js_state(page: Any, result: ParsedTable) -> None:
+    try:
+        from .js_state import read_live_state
+    except Exception as exc:  # pragma: no cover
+        result.parse_errors.append(f"js_state import failed: {exc}")
+        return
+
+    live = read_live_state(page)
+    if not live.ok:
+        if live.error:
+            result.parse_errors.append(f"dk_js: {live.error}")
+        return
+
+    result.state_source = "dk_js"
+    result.matched_selectors.append("__durakBoard")
+    result.our_seat = live.seat
+    result.board_active = live.active
+    result.canvas_only_cards = False  # we have memory state despite canvas paint
+
+    if live.hand:
+        result.hand = list(live.hand)
+    if live.table_attacks:
+        result.table_attacks = list(live.table_attacks)
+        result.table_defenses = list(live.table_defenses)
+    if live.trump is not None:
+        result.trump = live.trump
+    if live.trump_card is not None:
+        result.trump_card = live.trump_card
+        result.trump = live.trump_card.suit
+    # sc is not reliably stock size; keep DOM stock if any, else leave None
+    if live.turn_mode == 2:
+        # Take UI mode from dk.js
+        result.can_take = result.can_take or True
+        result.defender_taking = False
+    if live.active and not (result.can_take or result.can_pass or result.can_done):
+        # Active board without buttons yet — still our interaction window
+        result.our_turn = True
 
 
 def cards_mentioned_in_text(text: str) -> Set[Card]:

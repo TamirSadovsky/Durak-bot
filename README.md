@@ -39,7 +39,7 @@ python -m durak_bot --probe
 2. By default the bot opens the Durak client the same way **GUEST** does (`gstart`) — no password automation. For a real account, log in **manually once** in that profile (`--no-guest` on the landing page if you prefer).
 3. Do **not** put passwords in `.env` commits, chat, or the repo.
 4. Join a Durak table yourself and sit down.
-5. Read `docs/playok-mapping.md`. **Cards are drawn on `canvas.noth`** — DOM cannot read the hand yet. Take/Pass/OK are real `button.minw` controls. Full card auto-click needs a v2 canvas/JS hook; the loop pauses when the hand cannot be parsed.
+5. Read `docs/playok-mapping.md`. Cards are **painted** on `canvas.noth`, but the bot reads them from a **patched `dk.js` board** (`window.__durakBoard`) and plays via select + WebSocket opcode 92 (DOM Take/Pass when visible).
 
 ## Run the bot
 
