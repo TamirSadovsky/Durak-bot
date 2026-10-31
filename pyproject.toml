@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "durak-bot"
+version = "0.1.0"
+description = "PlayOK podkidnoy Durak bot: rules engine, phased heuristic AI, Playwright driver"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Tamir Sadovsky" }]
+dependencies = [
+  "playwright>=1.40.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4.0",
+]
+
+[project.scripts]
+durak-bot = "durak_bot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["durak_bot*", "durak_engine*", "durak_ai*", "playok_driver*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
