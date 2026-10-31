@@ -10,7 +10,12 @@ from typing import Any, List
 from durak_engine.actions import Action, ActionType
 from durak_engine.cards import Card
 
-from .js_state import js_click_card_via_region, js_commit_take_or_pass, js_play_card
+from .js_state import (
+    js_click_card_via_region,
+    js_click_pass,
+    js_click_take,
+    js_play_card,
+)
 from .parser import (
     BUTTON_DONE,
     BUTTON_PASS,
@@ -28,19 +33,27 @@ def _jitter_sleep(min_s: float = 0.15, max_s: float = 0.55) -> None:
     time.sleep(random.uniform(min_s, max_s))
 
 
-def _click_first_visible(page: Any, selectors: List[str], allow_disabled: bool = False) -> bool:
+def _click_all_visible(page: Any, selectors: List[str], allow_disabled: bool = False) -> bool:
+    """Try every match (not only .first) — after a hand, stale hidden buttons linger."""
     for sel in selectors:
         try:
-            loc = page.locator(sel).first
-            if not loc.is_visible():
-                continue
-            if not allow_disabled and loc.is_disabled():
-                continue
-            _jitter_sleep()
-            loc.click()
-            return True
+            locs = page.locator(sel)
+            n = locs.count()
         except Exception:
             continue
+        # Prefer later nodes (newest bout chrome)
+        for i in range(n - 1, -1, -1):
+            try:
+                el = locs.nth(i)
+                if not el.is_visible():
+                    continue
+                if not allow_disabled and el.is_disabled():
+                    continue
+                _jitter_sleep()
+                el.click(force=True, timeout=2000)
+                return True
+            except Exception:
+                continue
     return False
 
 
@@ -57,7 +70,7 @@ def click_card_in_hand(page: Any, card: Card) -> bool:
             parsed = _attrs_card(el)
             if parsed == card:
                 _jitter_sleep()
-                el.click()
+                el.click(force=True)
                 return True
 
     _jitter_sleep(0.08, 0.25)
@@ -74,7 +87,6 @@ def click_card_in_hand(page: Any, card: Card) -> bool:
         result = js_click_card_via_region(page, card)
         if result and result.get("ok"):
             _jitter_sleep(0.1, 0.3)
-            # After selecting via click, commit play
             commit = page.evaluate("() => window.__durakCommit(0)")
             return bool(commit and commit.get("ok"))
     except Exception as exc:
@@ -91,31 +103,39 @@ def perform_action(page: Any, action: Action) -> bool:
         return click_card_in_hand(page, action.card)
 
     if action.type == ActionType.TAKE:
-        if _click_first_visible(page, BUTTON_TAKE):
-            return True
+        # 1) Live dk.js button ref (tab.zb) — reliable across hands
         try:
-            # Durak take uses Rc with empty selection (mode 0)
-            r = js_commit_take_or_pass(page, as_pass=False)
-            return bool(r and r.get("ok"))
-        except Exception:
-            return False
+            r = js_click_take(page)
+            if r and r.get("ok"):
+                logger.info("Take via %s", r.get("method"))
+                return True
+            logger.warning("Take JS path failed: %s", r)
+        except Exception as exc:
+            logger.warning("Take JS exception: %s", exc)
+        # 2) DOM scan newest→oldest
+        if _click_all_visible(page, BUTTON_TAKE):
+            return True
+        return False
 
     if action.type == ActionType.PASS:
-        if _click_first_visible(page, BUTTON_PASS):
-            return True
-        if _click_first_visible(page, BUTTON_DONE):
-            return True
         try:
-            r = js_commit_take_or_pass(page, as_pass=True)
-            return bool(r and r.get("ok"))
-        except Exception:
-            return False
+            r = js_click_pass(page)
+            if r and r.get("ok"):
+                logger.info("Pass via %s", r.get("method"))
+                return True
+        except Exception as exc:
+            logger.warning("Pass JS exception: %s", exc)
+        if _click_all_visible(page, BUTTON_PASS):
+            return True
+        if _click_all_visible(page, BUTTON_DONE):
+            return True
+        return False
 
     if action.type == ActionType.DONE:
-        if _click_first_visible(page, BUTTON_DONE):
+        if _click_all_visible(page, BUTTON_DONE):
             return True
         try:
-            r = js_commit_take_or_pass(page, as_pass=True)
+            r = js_click_pass(page)
             return bool(r and r.get("ok"))
         except Exception:
             return False
@@ -125,7 +145,7 @@ def perform_action(page: Any, action: Action) -> bool:
 
 def join_first_table(page: Any) -> bool:
     """Optional helper — default workflow is still manual join."""
-    return _click_first_visible(page, JOIN_TABLE_SELECTORS)
+    return _click_all_visible(page, JOIN_TABLE_SELECTORS)
 
 
 def sit_first_open_seat(page: Any) -> bool:
@@ -137,7 +157,7 @@ def sit_first_open_seat(page: Any) -> bool:
                 el = locs.nth(i)
                 if el.is_visible() and not el.is_disabled():
                     _jitter_sleep()
-                    el.click()
+                    el.click(force=True)
                     return True
         except Exception:
             continue

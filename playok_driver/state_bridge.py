@@ -37,12 +37,23 @@ def parsed_to_state(
             defense = parsed.table_defenses[i]
         table.append(TablePair(attack=atk, defense=defense))
 
+    uncovered = any(not p.covered for p in table)
     if we_are_defender is None:
-        we_are_defender = parsed.can_take and not parsed.can_pass
+        # Take is shown during defend even when Pass is also visible (often disabled).
+        # Do NOT require `not can_pass` — that broke defender detection after hand 1.
+        we_are_defender = bool(
+            parsed.can_take
+            or parsed.defender_taking
+            or (uncovered and (parsed.board_active or parsed.can_take or parsed.our_turn))
+            or (uncovered and parsed.state_source == "dk_js" and parsed.board_active)
+        )
+        # Uncovered attack on table while it is our interaction window → defending
+        if uncovered and (parsed.board_active or parsed.our_turn or parsed.can_take):
+            we_are_defender = True
 
     if we_are_defender:
         attacker_index, defender_index = 1, 0
-        phase = Phase.DEFENSE if any(not p.covered for p in table) else Phase.THROW_IN
+        phase = Phase.DEFENSE if uncovered else Phase.THROW_IN
         active = 0
     elif table and all(p.covered for p in table):
         attacker_index, defender_index = 0, 1

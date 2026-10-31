@@ -127,11 +127,7 @@ def js_play_card(page: Any, card: Card) -> dict:
 
 
 def js_commit_take_or_pass(page: Any, *, as_pass: bool = False) -> dict:
-    """
-    Prefer clicking DOM buttons; JS fallback sends opcode 92.
-    Take/pass on Durak Ff both use Rc (mode 0 with empty or selected L).
-    Alternate pass/ok UI uses mode 2.
-    """
+    """Legacy opcode-92 fallback (prefer js_click_take / js_click_pass)."""
     mode = 2 if as_pass else 0
     return page.evaluate(
         """(mode) => {
@@ -144,6 +140,16 @@ def js_commit_take_or_pass(page: Any, *, as_pass: bool = False) -> dict:
         }""",
         mode,
     )
+
+
+def js_click_take(page: Any) -> dict:
+    """Click live Take control (tab.zb) so PlayOK's own Rc handler runs."""
+    return page.evaluate("() => window.__durakClickTake()")
+
+
+def js_click_pass(page: Any) -> dict:
+    """Click live Pass/OK control (tab.yb / Ad)."""
+    return page.evaluate("() => window.__durakClickPass()")
 
 
 def js_click_card_via_region(page: Any, card: Card) -> dict:

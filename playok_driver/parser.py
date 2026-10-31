@@ -178,16 +178,21 @@ def _query_cards(page: Any, selectors: List[str], matched: List[str]) -> List[Ca
 
 
 def _button_enabled_visible(page: Any, selectors: List[str], matched: List[str]) -> bool:
+    """True if any match is visible+enabled (scan all; ignore stale hidden duplicates)."""
     for sel in selectors:
         try:
-            loc = page.locator(sel).first
-            if loc.count() < 0:
-                continue
-            if loc.is_visible() and not loc.is_disabled():
-                matched.append(sel)
-                return True
+            locs = page.locator(sel)
+            n = locs.count()
         except Exception:
             continue
+        for i in range(n - 1, -1, -1):
+            try:
+                loc = locs.nth(i)
+                if loc.is_visible() and not loc.is_disabled():
+                    matched.append(sel)
+                    return True
+            except Exception:
+                continue
     return False
 
 

@@ -56,6 +56,17 @@ Outbound plays: `[92, tableId, 8, 0, ...cardCodes, timestamp]`.
 | Seats | `button.butsit` |
 | Take / Pass / OK | `button.minw` with those labels |
 
+## Take / Pass after a finished hand
+
+PlayOK keeps **multiple** `button.minw` nodes across bouts; `.first` can hit a stale hidden Take.  
+The bot now:
+
+1. Clicks live `window.__durakTab.zb` (Take) / `.yb` (Pass) so the real `Rc` handler runs
+2. Falls back to the **last** visible enabled `button.minw`
+3. Treats uncovered table + our turn as **defense** even if Pass is also visible
+
+Restart `python -m durak_bot` after pulling so `inject.js` reloads.
+
 ## Limits / gaps
 
 1. Board exists only **after a table view is created** (patched `dk.js` must load in that window). If patch needle drifts after a PlayOK deploy, `dk_patch.py` needs a new anchor.

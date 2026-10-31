@@ -149,6 +149,75 @@
     }
   };
 
+  function _clickNative(btn, label) {
+    if (!btn) return { ok: false, error: "no " + label + " button ref" };
+    try {
+      if (btn.disabled) return { ok: false, error: label + " disabled", disabled: true };
+      // Prefer DOM click so PlayOK's own onclick (Rc) runs — required after hand reset.
+      if (typeof btn.click === "function") {
+        btn.click();
+        return { ok: true, method: "dom-click", label: label };
+      }
+    } catch (e) {
+      return { ok: false, error: String(e), label: label };
+    }
+    return { ok: false, error: "click unavailable", label: label };
+  }
+
+  /** Take: use live tab.zb from dk.js (survives between bouts; avoids stale DOM duplicates). */
+  window.__durakClickTake = function () {
+    var tab = window.__durakTab;
+    var G = window.__durakBoard;
+    if (G) clearSelection(G);
+    if (tab && tab.zb) {
+      var r = _clickNative(tab.zb, "take");
+      if (r.ok) return r;
+    }
+    // Fallback: last visible enabled button.minw labeled take
+    var buttons = document.querySelectorAll("button.minw");
+    var last = null;
+    for (var i = 0; i < buttons.length; i++) {
+      var t = (buttons[i].textContent || "").trim().toLowerCase();
+      if (t === "take" || t.indexOf("take") === 0 || t === "взять") {
+        if (!buttons[i].disabled && buttons[i].offsetParent !== null) last = buttons[i];
+      }
+    }
+    if (last) {
+      last.click();
+      return { ok: true, method: "query-last-visible", label: "take" };
+    }
+    // Last resort: opcode 92 empty selection (same payload Rc sends for take)
+    return window.__durakCommit(0);
+  };
+
+  /** Pass / done: tab.yb (pass) then Ad/ok if present. */
+  window.__durakClickPass = function () {
+    var tab = window.__durakTab;
+    var G = window.__durakBoard;
+    if (G) clearSelection(G);
+    if (tab && tab.yb) {
+      var r = _clickNative(tab.yb, "pass");
+      if (r.ok) return r;
+    }
+    if (tab && tab.Ad) {
+      var r2 = _clickNative(tab.Ad, "ok");
+      if (r2.ok) return r2;
+    }
+    var buttons = document.querySelectorAll("button.minw");
+    var last = null;
+    for (var i = 0; i < buttons.length; i++) {
+      var t = (buttons[i].textContent || "").trim().toLowerCase();
+      if (t === "pass" || t === "пас" || t === "ok" || t === "done") {
+        if (!buttons[i].disabled && buttons[i].offsetParent !== null) last = buttons[i];
+      }
+    }
+    if (last) {
+      last.click();
+      return { ok: true, method: "query-last-visible", label: "pass" };
+    }
+    return window.__durakCommit(2);
+  };
+
   window.__durakClickRegion = function (seat, index) {
     var G = window.__durakBoard;
     if (!G || !G.Sa || !G.u) return { ok: false, error: "no regions" };
